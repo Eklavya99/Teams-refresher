@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teams-refresher"
+version = "2.0.0"
+description = "Keep Microsoft Teams showing Available instead of Away, on Linux, macOS and Windows."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+classifiers = [
+    "Environment :: No Input/Output (Daemon)",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+]
+# Deliberately none: every platform is reached through ctypes and the standard
+# library. PyGObject is used on GNOME when it happens to be installed, and the
+# daemon falls back to gdbus when it isn't.
+dependencies = []
+
+[project.scripts]
+teams-refresher = "teams_refresher.cli:main"
+
+[tool.setuptools]
+packages = ["teams_refresher", "teams_refresher.backends"]
