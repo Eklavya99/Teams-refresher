@@ -6,7 +6,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 %h/.local/bin/teams-refresher --threshold 180
+ExecStart=%h/.local/bin/teams-refresher --threshold 180
 Restart=on-failure
 RestartSec=5
 # Harmless hardening: this only ever needs the session bus and /dev/uinput.

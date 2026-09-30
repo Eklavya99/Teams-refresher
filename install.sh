@@ -13,11 +13,32 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 
 [ "$(id -u)" -ne 0 ] || { echo "Run as your normal user, not root."; exit 1; }
 
+REPO=eklavya99/teams-refresher
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) echo "Unsupported CPU: $(uname -m)"; exit 1 ;;
+esac
+
+BUILD="$(mktemp -d)"
+trap 'rm -rf "$BUILD"' EXIT
+if [ -x "$SRC_DIR/teams-refresher" ]; then
+  say "Using the prebuilt binary in $SRC_DIR"
+  cp "$SRC_DIR/teams-refresher" "$BUILD/teams-refresher"
+elif command -v go >/dev/null 2>&1 && [ -f "$SRC_DIR/go.mod" ]; then
+  say "Building from source with $(go version | cut -d' ' -f3)"
+  (cd "$SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$BUILD/teams-refresher" .)
+else
+  say "Downloading the latest release for linux/$ARCH"
+  curl -fsSL -o "$BUILD/teams-refresher" \
+    "https://github.com/$REPO/releases/latest/download/teams-refresher-linux-$ARCH"
+fi
+
 say "Installing the daemon to $BIN_DIR/teams-refresher"
 # Installed outside the project dir so the service still starts if this
 # removable volume isn't mounted at login.
 mkdir -p "$BIN_DIR" "$DOC_DIR" "$UNIT_DIR"
-install -m 0755 "$SRC_DIR/teams_refresher.py" "$BIN_DIR/teams-refresher"
+install -m 0755 "$BUILD/teams-refresher" "$BIN_DIR/teams-refresher"
 install -m 0644 "$SRC_DIR/README.md" "$DOC_DIR/README.md" 2>/dev/null || true
 
 say "Granting access to /dev/uinput (needs sudo, one time)"
@@ -39,7 +60,7 @@ else
 fi
 
 say "Installing the systemd user service"
-install -m 0644 "$SRC_DIR/systemd/teams-refresher.service" "$UNIT_DIR/teams-refresher.service"
+install -m 0644 "$SRC_DIR/teams-refresher.service" "$UNIT_DIR/teams-refresher.service"
 systemctl --user daemon-reload
 
 if ! command -v teams-refresher >/dev/null 2>&1; then
