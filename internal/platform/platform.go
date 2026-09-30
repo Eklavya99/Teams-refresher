@@ -1,4 +1,7 @@
-package main
+// Package platform holds everything OS-specific: reading the idle clock,
+// knowing whether the session is locked, injecting one invisible input event,
+// and (on Windows) installing itself to run at login.
+package platform
 
 import (
 	"errors"
@@ -40,8 +43,8 @@ type Event struct {
 	Locked bool // for LockChanged
 }
 
-// PlatformOptions configures newPlatform (implemented per OS).
-type PlatformOptions struct {
+// Options configures New (implemented per OS).
+type Options struct {
 	Key       string        // F13..F16
 	Pointer   bool          // also jiggle the pointer
 	Threshold time.Duration // idle time that counts as "crossed"

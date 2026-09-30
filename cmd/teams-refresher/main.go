@@ -19,9 +19,14 @@ import (
 	"os/signal"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/eklavya99/teams-refresher/internal/logx"
+	"github.com/eklavya99/teams-refresher/internal/platform"
+	"github.com/eklavya99/teams-refresher/internal/refresher"
 )
 
 type options struct {
@@ -67,8 +72,8 @@ func parseFlags(args []string) (*options, error) {
 		return nil, fmt.Errorf("unexpected argument: %s", fs.Arg(0))
 	}
 	o.key = strings.ToUpper(o.key)
-	if !slices.Contains(Keys, o.key) {
-		return nil, fmt.Errorf("--key must be one of %s", strings.Join(Keys, ", "))
+	if !slices.Contains(platform.Keys, o.key) {
+		return nil, fmt.Errorf("--key must be one of %s", strings.Join(platform.Keys, ", "))
 	}
 	if o.threshold < 1 {
 		return nil, errors.New("--threshold must be at least 1 second")
@@ -116,10 +121,10 @@ func run(args []string) int {
 	}
 
 	daemon := !(o.status || o.once || o.install || o.uninstall)
-	prepareOutput(daemon)
-	logVerbose = o.verbose
+	platform.PrepareOutput(daemon)
+	logx.Verbose = o.verbose
 
-	cfg := Config{
+	cfg := refresher.Config{
 		Threshold:   time.Duration(o.threshold) * time.Second,
 		Key:         o.key,
 		AllowLocked: o.allowLocked,
@@ -128,19 +133,19 @@ func run(args []string) int {
 
 	switch {
 	case o.install:
-		return report(installService(cfg, o.pointer))
+		return report(platform.InstallService(daemonArgs(o)))
 	case o.uninstall:
-		return report(uninstallService())
+		return report(platform.UninstallService())
 	case o.status:
 		return status(cfg)
 	}
 
 	if o.once && o.dryRun {
-		logInfo("[dry-run] would tap %s once", o.key)
+		logx.Info("[dry-run] would tap %s once", o.key)
 		return 0
 	}
 
-	p, err := newPlatform(PlatformOptions{
+	p, err := platform.New(platform.Options{
 		Key:       o.key,
 		Pointer:   o.pointer,
 		Threshold: cfg.Threshold,
@@ -156,24 +161,24 @@ func run(args []string) int {
 		if err := p.Nudge(); err != nil {
 			return report(err)
 		}
-		logInfo("single %s nudge sent", o.key)
+		logx.Info("single %s nudge sent", o.key)
 		return 0
 	}
 
-	release, ok := singleInstance()
+	release, ok := platform.SingleInstance()
 	if !ok {
-		logInfo("another teams-refresher is already running; exiting")
+		logx.Info("another teams-refresher is already running; exiting")
 		return 0
 	}
 	defer release()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return report(NewRefresher(cfg, p).Run(ctx))
+	return report(refresher.New(cfg, p).Run(ctx))
 }
 
-func status(cfg Config) int {
-	p, err := newPlatform(PlatformOptions{Key: cfg.Key, Threshold: cfg.Threshold})
+func status(cfg refresher.Config) int {
+	p, err := platform.New(platform.Options{Key: cfg.Key, Threshold: cfg.Threshold})
 	if err != nil {
 		return report(err)
 	}
@@ -195,13 +200,25 @@ func status(cfg Config) int {
 	return 0
 }
 
+// daemonArgs are the options the installed login copy runs with.
+func daemonArgs(o *options) []string {
+	args := []string{"--threshold", strconv.Itoa(o.threshold), "--key", o.key}
+	if o.pointer {
+		args = append(args, "--pointer")
+	}
+	if o.allowLocked {
+		args = append(args, "--allow-locked")
+	}
+	return args
+}
+
 func report(err error) int {
 	if err == nil {
 		return 0
 	}
-	// logOut is stderr, or the log file when running detached on Windows.
-	fmt.Fprintf(logOut, "error: %v\n", err)
-	if errors.Is(err, ErrPermission) {
+	// logx.Out is stderr, or the log file when running detached on Windows.
+	fmt.Fprintf(logx.Out, "error: %v\n", err)
+	if errors.Is(err, platform.ErrPermission) {
 		return 13
 	}
 	return 1

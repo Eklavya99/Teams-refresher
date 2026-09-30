@@ -1,4 +1,4 @@
-package main
+package platform
 
 // Windows: Teams (the desktop app, or Teams in Edge/Chrome) decides you're
 // idle from the system-wide last-input time -- the same clock
@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const ineffectiveHint = "SendInput may be blocked (for example while an elevated " +
+const IneffectiveHint = "SendInput may be blocked (for example while an elevated " +
 	"window has focus, or on the secure desktop); try --pointer."
 
 var (
@@ -89,14 +89,14 @@ func moveInput(dx int32) input {
 }
 
 type windowsPlatform struct {
-	opts   PlatformOptions
+	opts   Options
 	vk     uint16
 	events chan Event
 	stop   chan struct{}
 	once   sync.Once
 }
 
-func newPlatform(opts PlatformOptions) (Platform, error) {
+func New(opts Options) (Platform, error) {
 	p := &windowsPlatform{opts: opts, vk: windowsVKs[opts.Key], stop: make(chan struct{})}
 	if opts.Watch {
 		p.events = make(chan Event, 8)
@@ -198,7 +198,7 @@ func (p *windowsPlatform) Close() error {
 
 // singleInstance stops a second daemon (say, a manual run while the login
 // copy is going) from doubling up the nudges.
-func singleInstance() (release func(), ok bool) {
+func SingleInstance() (release func(), ok bool) {
 	name, _ := windows.UTF16PtrFromString(`Local\teams-refresher`)
 	h, err := windows.CreateMutex(nil, false, name)
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
