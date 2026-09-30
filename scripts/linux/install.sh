@@ -2,7 +2,8 @@
 # Install the Teams refresher: udev rule, group membership, binary, user service.
 set -euo pipefail
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # scripts/linux
+ROOT_DIR="$(cd "$SRC_DIR/../.." && pwd)"                   # repo root
 BIN_DIR="$HOME/.local/bin"
 DOC_DIR="$HOME/.local/share/teams-refresher"
 UNIT_DIR="$HOME/.config/systemd/user"
@@ -22,12 +23,12 @@ esac
 
 BUILD="$(mktemp -d)"
 trap 'rm -rf "$BUILD"' EXIT
-if [ -x "$SRC_DIR/teams-refresher" ]; then
-  say "Using the prebuilt binary in $SRC_DIR"
-  cp "$SRC_DIR/teams-refresher" "$BUILD/teams-refresher"
-elif command -v go >/dev/null 2>&1 && [ -f "$SRC_DIR/go.mod" ]; then
+if [ -x "$ROOT_DIR/teams-refresher" ]; then
+  say "Using the prebuilt binary in $ROOT_DIR"
+  cp "$ROOT_DIR/teams-refresher" "$BUILD/teams-refresher"
+elif command -v go >/dev/null 2>&1 && [ -f "$ROOT_DIR/go.mod" ]; then
   say "Building from source with $(go version | cut -d' ' -f3)"
-  (cd "$SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$BUILD/teams-refresher" .)
+  (cd "$ROOT_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$BUILD/teams-refresher" ./cmd/teams-refresher)
 else
   say "Downloading the latest release for linux/$ARCH"
   curl -fsSL -o "$BUILD/teams-refresher" \
@@ -39,7 +40,7 @@ say "Installing the daemon to $BIN_DIR/teams-refresher"
 # removable volume isn't mounted at login.
 mkdir -p "$BIN_DIR" "$DOC_DIR" "$UNIT_DIR"
 install -m 0755 "$BUILD/teams-refresher" "$BIN_DIR/teams-refresher"
-install -m 0644 "$SRC_DIR/README.md" "$DOC_DIR/README.md" 2>/dev/null || true
+install -m 0644 "$ROOT_DIR/README.md" "$DOC_DIR/README.md" 2>/dev/null || true
 
 say "Granting access to /dev/uinput (needs sudo, one time)"
 sudo modprobe uinput

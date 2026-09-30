@@ -1,4 +1,4 @@
-package main
+package platform
 
 import (
 	"testing"
@@ -21,7 +21,7 @@ func TestInputLayout(t *testing.T) {
 }
 
 func TestIdleAndLockReadable(t *testing.T) {
-	p, _ := newPlatform(PlatformOptions{Key: "F15"})
+	p, _ := New(Options{Key: "F15"})
 	defer p.Close()
 	if _, err := p.IdleTime(); err != nil {
 		t.Fatalf("IdleTime: %v", err)

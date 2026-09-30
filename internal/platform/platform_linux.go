@@ -1,4 +1,4 @@
-package main
+package platform
 
 // Linux (GNOME on Wayland): Teams in a Chromium browser asks the browser
 // whether you're idle, and Chromium reads the compositor's idle clock --
@@ -17,9 +17,11 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
+
+	"github.com/eklavya99/teams-refresher/internal/logx"
 )
 
-const ineffectiveHint = "The virtual device may not be reaching the compositor; try " +
+const IneffectiveHint = "The virtual device may not be reaching the compositor; try " +
 	"--pointer, or check that /dev/uinput is writable."
 
 // ---------------------------------------------------------------------------
@@ -72,7 +74,7 @@ var (
 const uinputHelp = `cannot open /dev/uinput for writing.
 
 This is the one privileged bit the daemon needs: permission to create a
-virtual input device. Run ./install.sh once to add a udev rule and put you
+virtual input device. Run scripts/linux/install.sh once to add a udev rule and put you
 in the 'input' group, then log out and back in (or use: sg input -c ...).`
 
 // virtualInput is a virtual keyboard (+ optional pointer) backed by /dev/uinput.
@@ -128,7 +130,7 @@ func (v *virtualInput) open() error {
 	// Give udev/libinput a moment to enumerate the device, otherwise the very
 	// first event can be emitted before the compositor is listening.
 	time.Sleep(200 * time.Millisecond)
-	logDebug("virtual input device created")
+	logx.Debug("virtual input device created")
 	return nil
 }
 
@@ -165,7 +167,7 @@ func (v *virtualInput) close() {
 	unix.Syscall(unix.SYS_IOCTL, uintptr(v.fd), uiDevDestroy, 0)
 	unix.Close(v.fd)
 	v.fd = 0
-	logDebug("virtual input device destroyed")
+	logx.Debug("virtual input device destroyed")
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +182,7 @@ const (
 )
 
 type linuxPlatform struct {
-	opts   PlatformOptions
+	opts   Options
 	conn   *dbus.Conn
 	dev    *virtualInput
 	events chan Event
@@ -191,7 +193,7 @@ type linuxPlatform struct {
 	armed   bool
 }
 
-func newPlatform(opts PlatformOptions) (Platform, error) {
+func New(opts Options) (Platform, error) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return nil, fmt.Errorf("connect to the session D-Bus (is this a GNOME desktop session?): %w", err)
@@ -216,7 +218,7 @@ func newPlatform(opts PlatformOptions) (Platform, error) {
 		}
 		for _, m := range matches {
 			if err := conn.AddMatchSignal(m...); err != nil {
-				logWarn("could not subscribe to D-Bus signal: %v", err)
+				logx.Warn("could not subscribe to D-Bus signal: %v", err)
 			}
 		}
 		conn.Signal(p.sigs)
@@ -241,7 +243,7 @@ func (p *linuxPlatform) call(dest, path, method string, out any, args ...any) er
 func (p *linuxPlatform) IdleTime() (time.Duration, error) {
 	var ms uint64
 	if err := p.call(mutterName, mutterPath, "GetIdletime", &ms); err != nil {
-		logWarn("%v", err)
+		logx.Warn("%v", err)
 		return 0, err
 	}
 	return time.Duration(ms) * time.Millisecond, nil
@@ -250,7 +252,7 @@ func (p *linuxPlatform) IdleTime() (time.Duration, error) {
 func (p *linuxPlatform) Locked() (bool, error) {
 	var active bool
 	if err := p.call(saverName, saverPath, "GetActive", &active); err != nil {
-		logWarn("%v", err)
+		logx.Warn("%v", err)
 		return false, err
 	}
 	return active, nil
@@ -264,10 +266,10 @@ func (p *linuxPlatform) Nudge() error {
 	if err == nil {
 		return nil
 	}
-	logError("failed to emit nudge: %v -- recreating device", err)
+	logx.Error("failed to emit nudge: %v -- recreating device", err)
 	p.dev.close()
 	if rerr := p.dev.open(); rerr != nil {
-		logError("could not recreate virtual device: %v", rerr)
+		logx.Error("could not recreate virtual device: %v", rerr)
 	}
 	return err
 }
@@ -292,16 +294,16 @@ func (p *linuxPlatform) Rearm() {
 		return
 	}
 	if time.Duration(ms)*time.Millisecond >= p.opts.Threshold {
-		logDebug("idle still high; deferring re-arm")
+		logx.Debug("idle still high; deferring re-arm")
 		return
 	}
 	var id uint32
 	if err := p.call(mutterName, mutterPath, "AddIdleWatch", &id, uint64(p.opts.Threshold.Milliseconds())); err != nil {
-		logWarn("could not arm idle watch (%v); relying on the backstop poll", err)
+		logx.Warn("could not arm idle watch (%v); relying on the backstop poll", err)
 		return
 	}
 	p.watchID, p.armed = id, true
-	logDebug("idle watch armed (id=%d, %s)", id, p.opts.Threshold)
+	logx.Debug("idle watch armed (id=%d, %s)", id, p.opts.Threshold)
 }
 
 func (p *linuxPlatform) disarmLocked() {
@@ -345,9 +347,9 @@ func (p *linuxPlatform) dispatch() {
 			p.armed = false // our watch died with the old gnome-shell
 			p.mu.Unlock()
 			if newOwner == "" {
-				logWarn("Mutter went away (gnome-shell restart?) -- watch invalidated")
+				logx.Warn("Mutter went away (gnome-shell restart?) -- watch invalidated")
 			} else {
-				logInfo("Mutter available -- (re)arming idle watch")
+				logx.Info("Mutter available -- (re)arming idle watch")
 				p.Rearm()
 			}
 		}
@@ -357,7 +359,7 @@ func (p *linuxPlatform) dispatch() {
 func (p *linuxPlatform) StatusLines() []string {
 	state := "writable"
 	if unix.Access("/dev/uinput", unix.W_OK) != nil {
-		state = "NOT writable (run ./install.sh)"
+		state = "NOT writable (run scripts/linux/install.sh)"
 	}
 	return []string{"uinput: " + state}
 }
@@ -373,17 +375,17 @@ func (p *linuxPlatform) Close() error {
 }
 
 // ---------------------------------------------------------------------------
-// OS hooks used by main.go
+// OS hooks used by cmd/teams-refresher
 // ---------------------------------------------------------------------------
 
-func prepareOutput(daemon bool) {}
+func PrepareOutput(daemon bool) {}
 
-func singleInstance() (release func(), ok bool) { return func() {}, true }
+func SingleInstance() (release func(), ok bool) { return func() {}, true }
 
-func installService(Config, bool) error {
-	return errors.New("on Linux, use ./install.sh and the systemd user service")
+func InstallService([]string) error {
+	return errors.New("on Linux, use scripts/linux/install.sh and the systemd user service")
 }
 
-func uninstallService() error {
-	return errors.New("on Linux, use ./uninstall.sh")
+func UninstallService() error {
+	return errors.New("on Linux, use scripts/linux/uninstall.sh")
 }

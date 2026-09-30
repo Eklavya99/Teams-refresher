@@ -1,8 +1,13 @@
-package main
+// Package refresher is the OS-independent nudge policy: when to tap a key, and
+// when not to.
+package refresher
 
 import (
 	"context"
 	"time"
+
+	"github.com/eklavya99/teams-refresher/internal/logx"
+	"github.com/eklavya99/teams-refresher/internal/platform"
 )
 
 // Config is the nudge policy, independent of OS.
@@ -19,7 +24,7 @@ type Config struct {
 // idle clock cannot spin.
 type Refresher struct {
 	cfg      Config
-	p        Platform
+	p        platform.Platform
 	now      func() time.Time
 	cooldown time.Duration
 	poll     time.Duration
@@ -30,7 +35,7 @@ type Refresher struct {
 	lastNudge   time.Time // zero until the first nudge
 }
 
-func NewRefresher(cfg Config, p Platform) *Refresher {
+func New(cfg Config, p platform.Platform) *Refresher {
 	return &Refresher{
 		cfg:      cfg,
 		p:        p,
@@ -47,13 +52,13 @@ func NewRefresher(cfg Config, p Platform) *Refresher {
 func (r *Refresher) MaybeNudge(reason string) bool {
 	if !r.lastNudge.IsZero() {
 		if since := r.now().Sub(r.lastNudge); since < r.cooldown {
-			logDebug("skipping nudge (%s): cooling down, %.0fs since last", reason, since.Seconds())
+			logx.Debug("skipping nudge (%s): cooling down, %.0fs since last", reason, since.Seconds())
 			return false
 		}
 	}
 
 	if r.locked && !r.cfg.AllowLocked {
-		logDebug("skipping nudge (%s): screen is locked", reason)
+		logx.Debug("skipping nudge (%s): screen is locked", reason)
 		return false
 	}
 
@@ -61,7 +66,7 @@ func (r *Refresher) MaybeNudge(reason string) bool {
 	known := err == nil
 	if known && idle < r.cfg.Threshold {
 		// Real activity beat us to it; nothing to do.
-		logDebug("skipping nudge (%s): idle %.0fs below threshold", reason, idle.Seconds())
+		logx.Debug("skipping nudge (%s): idle %.0fs below threshold", reason, idle.Seconds())
 		return false
 	}
 
@@ -72,15 +77,15 @@ func (r *Refresher) MaybeNudge(reason string) bool {
 		idleStr = idle.Round(time.Second).String()
 	}
 	if r.cfg.DryRun {
-		logInfo("[dry-run] would nudge #%d (%s, idle %s)", r.nudges, reason, idleStr)
+		logx.Info("[dry-run] would nudge #%d (%s, idle %s)", r.nudges, reason, idleStr)
 		return true
 	}
 
 	if err := r.p.Nudge(); err != nil {
-		logError("failed to emit nudge: %v", err)
+		logx.Error("failed to emit nudge: %v", err)
 		return false
 	}
-	logInfo("nudge #%d sent (%s) -- %s tapped, idle clock reset", r.nudges, reason, r.cfg.Key)
+	logx.Info("nudge #%d sent (%s) -- %s tapped, idle clock reset", r.nudges, reason, r.cfg.Key)
 	return true
 }
 
@@ -95,13 +100,13 @@ func (r *Refresher) Verify() bool {
 		r.ineffective++
 		switch r.ineffective {
 		case 1, 5, 20:
-			logWarn("nudge did not reset the idle clock (still %.0fs) -- %dx now. %s",
-				idle.Seconds(), r.ineffective, ineffectiveHint)
+			logx.Warn("nudge did not reset the idle clock (still %.0fs) -- %dx now. %s",
+				idle.Seconds(), r.ineffective, platform.IneffectiveHint)
 		}
 		return false
 	}
 	if r.ineffective > 0 {
-		logInfo("idle clock responding again")
+		logx.Info("idle clock responding again")
 	}
 	r.ineffective = 0
 	return true
@@ -121,7 +126,7 @@ func (r *Refresher) Run(ctx context.Context) error {
 	if r.cfg.DryRun {
 		dry = ", DRY RUN"
 	}
-	logInfo("watching: nudge after %s idle (backstop poll %s), key=%s, locked-screen=%s%s",
+	logx.Info("watching: nudge after %s idle (backstop poll %s), key=%s, locked-screen=%s%s",
 		r.cfg.Threshold, r.poll, r.cfg.Key, lockMode, dry)
 
 	ticker := time.NewTicker(r.poll)
@@ -139,8 +144,8 @@ func (r *Refresher) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			logInfo("shutting down")
-			logInfo("stopped after %d nudge(s)", r.nudges)
+			logx.Info("shutting down")
+			logx.Info("stopped after %d nudge(s)", r.nudges)
 			return nil
 		case ev, ok := <-events:
 			if !ok {
@@ -148,10 +153,10 @@ func (r *Refresher) Run(ctx context.Context) error {
 				continue
 			}
 			switch ev.Kind {
-			case IdleCrossed:
+			case platform.IdleCrossed:
 				nudge("idle watch")
 				r.p.Rearm()
-			case LockChanged:
+			case platform.LockChanged:
 				r.locked = ev.Locked
 				state, action := "unlocked", "active"
 				if r.locked {
@@ -160,7 +165,7 @@ func (r *Refresher) Run(ctx context.Context) error {
 						action = "pausing"
 					}
 				}
-				logInfo("screen %s -- %s", state, action)
+				logx.Info("screen %s -- %s", state, action)
 			}
 		case <-ticker.C:
 			r.p.Rearm()

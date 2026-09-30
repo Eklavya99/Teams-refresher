@@ -82,13 +82,13 @@ for the login copy. To change them, run `--install` again.
 ## Install — Linux
 
 ```bash
-./install.sh          # udev rule + 'input' group + binary + user service
+./scripts/linux/install.sh   # udev rule + 'input' group + binary + user service
 # log out and back in (the group change needs a fresh session)
 systemctl --user enable --now teams-refresher
 ```
 
-`install.sh` gets the binary in this order: an executable named
-`teams-refresher` already in this folder, else `go build` if Go ≥ 1.22 is
+`scripts/linux/install.sh` gets the binary in this order: an executable
+named `teams-refresher` in the repo root, else `go build` if Go ≥ 1.22 is
 installed, else the latest release download. It needs `sudo` exactly once,
 to let your user create virtual input devices. It installs the daemon to
 `~/.local/bin/teams-refresher` rather than running it from this directory, so
@@ -99,7 +99,7 @@ teams-refresher --status                  # idle time, lock state, uinput access
 systemctl --user status teams-refresher   # is the service running?
 journalctl --user -u teams-refresher -f   # watch it work
 systemctl --user disable --now teams-refresher   # off for good
-./uninstall.sh                            # remove everything install.sh added
+./scripts/linux/uninstall.sh              # remove everything install.sh added
 ```
 
 ## Options
@@ -114,7 +114,7 @@ systemctl --user disable --now teams-refresher   # off for good
 | `-n, --dry-run` | off | Log decisions, emit nothing. |
 | `-v, --verbose` | off | Debug logging. |
 | `--status` | — | One-shot health check. |
-| `--install` / `--uninstall` | — | Windows only. Linux uses `install.sh` / `uninstall.sh`. |
+| `--install` / `--uninstall` | — | Windows only. Linux uses `scripts/linux/install.sh` / `uninstall.sh`. |
 
 ## Behaviour worth knowing
 
@@ -162,24 +162,28 @@ removes the leftover package.
 
 ```bash
 go test ./...
-go build .            # for this OS
-./build.sh            # all four release binaries into dist/
+go build ./cmd/teams-refresher   # for this OS
+./scripts/build.sh               # all four release binaries into dist/
 ```
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
 binaries and attaches them to a GitHub Release.
 
-## Files
+## Project layout
 
-| Path | |
-|---|---|
-| `main.go` | Flags, modes (`--status`, `--once`, daemon). |
-| `refresher.go` | The nudge policy, shared by all OSes. |
-| `platform_linux.go` | Mutter D-Bus idle watch + `/dev/uinput` keyboard. |
-| `platform_windows.go` | `GetLastInputInfo` + `SendInput`, lock detection. |
-| `install_windows.go` | `--install` / `--uninstall`, background logging. |
-| `install.sh` / `uninstall.sh` | Linux setup and full removal. |
-| `teams-refresher.service` | systemd user unit, tied to `graphical-session.target`. |
+```
+cmd/teams-refresher/     entry point: flags, modes (--status, --once, daemon)
+internal/refresher/      the nudge policy, shared by all OSes (+ tests)
+internal/platform/       everything OS-specific
+  platform.go              the Platform interface
+  platform_linux.go        Mutter D-Bus idle watch + /dev/uinput keyboard
+  platform_windows.go      GetLastInputInfo + SendInput, lock detection
+  install_windows.go       --install / --uninstall, background logging
+internal/logx/           tiny levelled logger
+scripts/build.sh         cross-build all release binaries into dist/
+scripts/linux/           install.sh, uninstall.sh, systemd user unit
+.github/workflows/       CI (vet, test, build) and tagged releases
+```
 
 ## Troubleshooting
 

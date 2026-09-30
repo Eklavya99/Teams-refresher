@@ -1,4 +1,4 @@
-package main
+package platform
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -14,6 +13,8 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+
+	"github.com/eklavya99/teams-refresher/internal/logx"
 )
 
 const (
@@ -35,7 +36,7 @@ func logDir() string {
 // that terminal. Started at login (Run key) or by double-click, this process
 // owns a fresh console window: in daemon mode we drop it so nothing stays on
 // screen, and log to a file instead.
-func prepareOutput(daemon bool) {
+func PrepareOutput(daemon bool) {
 	if hwnd, _, _ := procGetConsoleWindow.Call(); hwnd != 0 {
 		if !daemon || !ownsConsole() {
 			return
@@ -43,7 +44,7 @@ func prepareOutput(daemon bool) {
 		procFreeConsole.Call()
 	}
 	if err := os.MkdirAll(logDir(), 0o755); err != nil {
-		logOut = io.Discard
+		logx.Out = io.Discard
 		return
 	}
 	path := filepath.Join(logDir(), "teams-refresher.log")
@@ -53,10 +54,10 @@ func prepareOutput(daemon bool) {
 	}
 	f, err := os.OpenFile(path, flags, 0o644)
 	if err != nil {
-		logOut = io.Discard
+		logx.Out = io.Discard
 		return
 	}
-	logOut = f
+	logx.Out = f
 }
 
 // ownsConsole reports whether we are the only process attached to our console,
@@ -67,20 +68,9 @@ func ownsConsole() bool {
 	return n == 1
 }
 
-func daemonArgs(cfg Config, pointer bool) []string {
-	args := []string{"--threshold", strconv.Itoa(int(cfg.Threshold.Seconds())), "--key", cfg.Key}
-	if pointer {
-		args = append(args, "--pointer")
-	}
-	if cfg.AllowLocked {
-		args = append(args, "--allow-locked")
-	}
-	return args
-}
-
-// installService copies the exe to a per-user location, registers it to start
-// at login, and starts it now. No admin rights needed.
-func installService(cfg Config, pointer bool) error {
+// InstallService copies the exe to a per-user location, registers it to start
+// at login with args, and starts it now. No admin rights needed.
+func InstallService(args []string) error {
 	src, err := os.Executable()
 	if err != nil {
 		return err
@@ -98,7 +88,6 @@ func installService(cfg Config, pointer bool) error {
 		}
 	}
 
-	args := daemonArgs(cfg, pointer)
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKeyPath, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("open Run key: %w", err)
@@ -126,7 +115,7 @@ func installService(cfg Config, pointer bool) error {
 	return nil
 }
 
-func uninstallService() error {
+func UninstallService() error {
 	if k, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.SET_VALUE); err == nil {
 		_ = k.DeleteValue(runValue)
 		k.Close()

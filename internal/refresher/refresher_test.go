@@ -1,10 +1,13 @@
-package main
+package refresher
 
 import (
 	"errors"
 	"io"
 	"testing"
 	"time"
+
+	"github.com/eklavya99/teams-refresher/internal/logx"
+	"github.com/eklavya99/teams-refresher/internal/platform"
 )
 
 type fakePlatform struct {
@@ -23,12 +26,12 @@ func (f *fakePlatform) Nudge() error {
 	}
 	return nil
 }
-func (f *fakePlatform) Events() <-chan Event  { return nil }
-func (f *fakePlatform) Rearm()                {}
-func (f *fakePlatform) StatusLines() []string { return nil }
-func (f *fakePlatform) Close() error          { return nil }
+func (f *fakePlatform) Events() <-chan platform.Event { return nil }
+func (f *fakePlatform) Rearm()                        {}
+func (f *fakePlatform) StatusLines() []string         { return nil }
+func (f *fakePlatform) Close() error                  { return nil }
 
-func init() { logOut = io.Discard }
+func init() { logx.Out = io.Discard }
 
 func newTest(cfg Config, p *fakePlatform) (*Refresher, *time.Time) {
 	if cfg.Threshold == 0 {
@@ -37,7 +40,7 @@ func newTest(cfg Config, p *fakePlatform) (*Refresher, *time.Time) {
 	if cfg.Key == "" {
 		cfg.Key = "F15"
 	}
-	r := NewRefresher(cfg, p)
+	r := New(cfg, p)
 	clock := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	r.now = func() time.Time { return clock }
 	return r, &clock
@@ -134,21 +137,5 @@ func TestIntervals(t *testing.T) {
 	r, _ = newTest(Config{Threshold: 600 * time.Second}, &fakePlatform{})
 	if r.cooldown != 60*time.Second || r.poll != 150*time.Second {
 		t.Fatalf("large threshold: cooldown %s poll %s", r.cooldown, r.poll)
-	}
-}
-
-func TestParseFlags(t *testing.T) {
-	o, err := parseFlags([]string{"-t", "30", "--key", "f13", "--pointer", "-n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if o.threshold != 30 || o.key != "F13" || !o.pointer || !o.dryRun {
-		t.Fatalf("unexpected options: %+v", o)
-	}
-	if _, err := parseFlags([]string{"--key", "F12"}); err == nil {
-		t.Fatalf("F12 should be rejected")
-	}
-	if _, err := parseFlags([]string{"--threshold", "0"}); err == nil {
-		t.Fatalf("zero threshold should be rejected")
 	}
 }
