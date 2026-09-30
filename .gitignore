@@ -1,5 +1,3 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
+/teams-refresher
+/teams-refresher.exe
+/dist/

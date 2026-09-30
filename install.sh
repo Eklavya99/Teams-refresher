@@ -1,22 +1,45 @@
 #!/usr/bin/env bash
-# Linux only, and only the part that needs root: permission to create a
-# virtual input device. Everything else -- installing the package and the
-# login service -- is the same three commands on all three operating systems
-# and lives in the README.
+# Install the Teams refresher: udev rule, group membership, binary, user service.
 set -euo pipefail
 
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$HOME/.local/bin"
+DOC_DIR="$HOME/.local/share/teams-refresher"
+UNIT_DIR="$HOME/.config/systemd/user"
 RULE=/etc/udev/rules.d/70-uinput-teams-refresher.rules
 
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 
-[ "$(uname -s)" = Linux ] || {
-  echo "This script is for Linux. macOS and Windows need no privileged setup:"
-  echo "  macOS   -- grant Accessibility permission when asked"
-  echo "  Windows -- nothing at all"
-  exit 1
-}
 [ "$(id -u)" -ne 0 ] || { echo "Run as your normal user, not root."; exit 1; }
+
+REPO=eklavya99/teams-refresher
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) echo "Unsupported CPU: $(uname -m)"; exit 1 ;;
+esac
+
+BUILD="$(mktemp -d)"
+trap 'rm -rf "$BUILD"' EXIT
+if [ -x "$SRC_DIR/teams-refresher" ]; then
+  say "Using the prebuilt binary in $SRC_DIR"
+  cp "$SRC_DIR/teams-refresher" "$BUILD/teams-refresher"
+elif command -v go >/dev/null 2>&1 && [ -f "$SRC_DIR/go.mod" ]; then
+  say "Building from source with $(go version | cut -d' ' -f3)"
+  (cd "$SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$BUILD/teams-refresher" .)
+else
+  say "Downloading the latest release for linux/$ARCH"
+  curl -fsSL -o "$BUILD/teams-refresher" \
+    "https://github.com/$REPO/releases/latest/download/teams-refresher-linux-$ARCH"
+fi
+
+say "Installing the daemon to $BIN_DIR/teams-refresher"
+# Installed outside the project dir so the service still starts if this
+# removable volume isn't mounted at login.
+mkdir -p "$BIN_DIR" "$DOC_DIR" "$UNIT_DIR"
+install -m 0755 "$BUILD/teams-refresher" "$BIN_DIR/teams-refresher"
+install -m 0644 "$SRC_DIR/README.md" "$DOC_DIR/README.md" 2>/dev/null || true
 
 say "Granting access to /dev/uinput (needs sudo, one time)"
 sudo modprobe uinput
@@ -36,14 +59,26 @@ else
   NEED_RELOGIN=0
 fi
 
-echo
-say "Done. Now install the daemon itself:"
-echo "  pip install --user ."
-echo "  teams-refresher --install-service"
+say "Installing the systemd user service"
+install -m 0644 "$SRC_DIR/teams-refresher.service" "$UNIT_DIR/teams-refresher.service"
+systemctl --user daemon-reload
+
+if ! command -v teams-refresher >/dev/null 2>&1; then
+  # ~/.profile prepends ~/.local/bin only when it already exists at login,
+  # so a first-time install is picked up by the same re-login the group needs.
+  NEED_RELOGIN=1
+fi
+
 echo
 if [ "$NEED_RELOGIN" = 1 ]; then
-  warn "Log out and back in first, to pick up the 'input' group."
+  warn "Log out and back in to pick up the 'input' group and ~/.local/bin on PATH."
+  warn "Then run:  systemctl --user enable --now teams-refresher"
+  echo
   echo "To try it right now without logging out:"
-  echo "  sg input -c 'python3 -m teams_refresher --once'"
+  echo "  sg input -c '$BIN_DIR/teams-refresher --once'"
+else
+  say "Done. Start it with:  systemctl --user enable --now teams-refresher"
 fi
+echo
 echo "Check state any time:  teams-refresher --status"
+echo "Watch it work:         journalctl --user -u teams-refresher -f"

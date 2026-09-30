@@ -4,192 +4,199 @@ Keeps Microsoft Teams showing **Available** instead of flipping to yellow
 "Away" the moment you stop touching the keyboard — so you can read, think,
 or work on a second machine without babysitting a key every few minutes.
 
-Runs on **Linux, macOS and Windows**, with no third-party packages.
+One small Go program, shipped as a single file per OS with nothing else to
+install:
+
+| OS | Works with | File |
+|---|---|---|
+| **Windows 10/11** | New Teams desktop app, or Teams in Edge/Chrome | `teams-refresher-windows-amd64.exe` (`-arm64` for Snapdragon PCs) |
+| **Linux** (GNOME on Wayland) | Teams in a Chromium browser (Brave, Chrome, Edge) | `teams-refresher-linux-amd64` / `-arm64` |
 
 ## How it works
 
-Teams web doesn't track your typing. It asks the browser whether *you* are
-idle, and the browser asks the operating system. So the whole job is: keep
-that one clock from reaching five minutes.
+Teams doesn't track your typing. It asks the OS (or, on the web, the browser,
+which asks the OS) how long since the last input. So the whole job is: keep
+that one idle clock from reaching five minutes.
 
 ```
-   system idle clock ──── past the threshold? ────▶ screen locked? ── yes ─▶ do nothing
-            ▲                                             │ no
-            │                                             ▼
-            │                              tap F15 on a synthetic keyboard
-            │                                             │
-            └────────── clock resets to 0 ◀───────────────┘
-                                 │
-                   browser idle detection ─▶ Teams: active
+   OS idle clock ──passes 180s──▶ screen locked?  ── yes ─▶ do nothing
+                                        │ no
+                                        ▼
+                              tap F15 as a real key event
+                                        │
+                              idle clock resets to 0 ─▶ Teams: active
 ```
 
-Every operating system spells both halves differently, so each one gets its
-own backend and the loop above stays the same:
+- **Windows:** reads the idle clock with `GetLastInputInfo` (checked every
+  5s, a single cheap call) and taps the key with `SendInput`. No admin
+  rights, no driver.
+- **Linux:** asks Mutter (`org.gnome.Mutter.IdleMonitor`) to signal the moment
+  the clock passes the threshold — event-driven, no polling loop — and taps
+  the key on a virtual keyboard created through `/dev/uinput`. That enters
+  through libinput exactly like real hardware, so it works with the browser
+  minimised or on another workspace. X11 tools like `xdotool` don't reset
+  Mutter's clock on Wayland; this does.
 
-| | reset the clock | read the clock | detect the lock |
-|---|---|---|---|
-| **Linux** | `/dev/uinput` virtual device (XTEST on X11 as a fallback) | Mutter on GNOME, freedesktop on KDE, XScreenSaver on X11 | GNOME / freedesktop ScreenSaver |
-| **macOS** | `CGEventPost` | `CGEventSourceSecondsSinceLastEventType` | `CGSSessionScreenIsLocked` |
-| **Windows** | `SendInput` | `GetLastInputInfo` | `OpenInputDesktop` |
-
-Three deliberate choices, unchanged from the original Linux-only version:
+Deliberate choices, both platforms:
 
 - **F15, not mouse movement.** No application binds F15, and it doesn't move
   your pointer — so it can't disturb a drag, a text selection, or a game. It
   is the quietest event that still counts as input.
-- **Synthetic input at the system level, not a browser automation trick.**
-  The event enters the input stack the way real hardware does, which is why
-  this works with **the browser minimised or on another workspace**.
-- **It only acts when you're actually idle.** It never fights your real
-  input, and it stops entirely when you lock the screen.
+- **Only when you're actually idle.** It never fights your real input, and
+  after each nudge it re-reads the idle clock and warns if the nudge didn't
+  register, instead of silently doing nothing.
 
-Instead of a fixed poll, the daemon sleeps until the earliest moment the
-threshold could next be crossed — 12s idle against a 180s threshold means
-nothing can happen for 168s, so it sleeps 168s. While you're working it backs
-off to almost nothing.
+## Install — Windows
 
-## Install
+1. Download `teams-refresher-windows-amd64.exe` from the
+   [latest release](https://github.com/eklavya99/teams-refresher/releases/latest)
+   (or from the **Actions** tab → latest CI run → `teams-refresher` artifact).
+2. Open a terminal (PowerShell or cmd) in your Downloads folder and install it:
+   ```powershell
+   .\teams-refresher-windows-amd64.exe --install
+   ```
+   This copies it to `%LOCALAPPDATA%\Programs\teams-refresher\`, registers it
+   to start at login (per-user `Run` key — no admin, no scheduled task), and
+   starts it now in the background.
 
-The same two commands everywhere:
+   The exe isn't code-signed, so Windows SmartScreen may warn the first time:
+   **More info → Run anyway**.
+
+Try it before installing, in the foreground with a 10s threshold:
+```powershell
+.\teams-refresher-windows-amd64.exe -v -t 10
+```
+Leave the keyboard alone and you'll see a nudge logged every ~10s. `Ctrl+C`
+stops it.
+
+Manage the installed copy:
+```powershell
+$tr = "$env:LOCALAPPDATA\Programs\teams-refresher\teams-refresher.exe"
+& $tr --status                                         # idle time, lock state
+Get-Content "$env:LOCALAPPDATA\teams-refresher\teams-refresher.log" -Wait   # live log
+& $tr --uninstall                                      # stop + remove login entry
+```
+Options passed to `--install` (e.g. `--install -t 120 --pointer`) are kept
+for the login copy. To change them, run `--install` again.
+
+## Install — Linux
 
 ```bash
-pip install --user .
-teams-refresher --install-service     # start it at every login
+./install.sh          # udev rule + 'input' group + binary + user service
+# log out and back in (the group change needs a fresh session)
+systemctl --user enable --now teams-refresher
 ```
 
-`--install-service` writes whichever of these your system uses, baking in any
-other options you pass alongside it:
-
-| | |
-|---|---|
-| Linux | a systemd user unit in `~/.config/systemd/user/` |
-| macOS | a LaunchAgent in `~/Library/LaunchAgents/` |
-| Windows | an entry under `HKCU\...\CurrentVersion\Run` |
-
-Install the package properly (rather than running it out of a clone) if you
-want the login service to survive: the service records the path it was
-installed from, and a checkout on a removable drive won't be there at boot.
-
-### One extra step per platform
-
-**Linux** — creating a virtual input device is privileged. Run the helper
-once; it adds a udev rule and puts you in the `input` group:
+`install.sh` gets the binary in this order: an executable named
+`teams-refresher` already in this folder, else `go build` if Go ≥ 1.22 is
+installed, else the latest release download. It needs `sudo` exactly once,
+to let your user create virtual input devices. It installs the daemon to
+`~/.local/bin/teams-refresher` rather than running it from this directory, so
+the service still starts when this volume isn't mounted.
 
 ```bash
-./install.sh
-# log out and back in, so the group change takes effect
+teams-refresher --status                  # idle time, lock state, uinput access
+systemctl --user status teams-refresher   # is the service running?
+journalctl --user -u teams-refresher -f   # watch it work
+systemctl --user disable --now teams-refresher   # off for good
+./uninstall.sh                            # remove everything install.sh added
 ```
 
-This is the only part that needs `sudo`, and it's the only reason the daemon
-can work under Wayland at all: X11 tools like `xdotool` either don't work or
-reach only XWayland clients, and neither resets the compositor's clock.
-
-**macOS** — grant Accessibility permission to whatever runs the daemon
-(your terminal for a foreground run, the `python3` binary for the LaunchAgent):
-System Settings → Privacy & Security → Accessibility. macOS ties the grant to
-the exact binary, so re-grant it after upgrading Python. The daemon refuses to
-start with instructions rather than tapping into the void.
-
-**Windows** — nothing. A normal user process may synthesise input into its own
-session.
-
-## Use
-
-```bash
-teams-refresher --status              # backends in use, idle time, lock state
-teams-refresher --once                # send a single nudge, exit
-teams-refresher -v --dry-run -t 10    # watch the logic with nothing emitted
-teams-refresher                       # run in the foreground, Ctrl-C to stop
-```
-
-Watching the service:
-
-```bash
-journalctl --user -u teams-refresher -f          # Linux
-tail -f ~/Library/Logs/teams-refresher.log       # macOS
-type %LOCALAPPDATA%\teams-refresher\teams-refresher.log   :: Windows
-```
-
-Turning it off:
-
-```bash
-teams-refresher --uninstall-service
-```
-
-### Options
+## Options
 
 | Flag | Default | Notes |
 |---|---|---|
 | `-t, --threshold` | `180` | Seconds idle before a nudge. Teams waits 5 min; 180s leaves headroom. |
 | `-k, --key` | `F15` | `F13`–`F16` if something on your system does bind F15. |
-| `--pointer` | off | Also jiggle the pointer 1px and back. Only for clients that watch mouse movement specifically. |
+| `--pointer` | off | Also jiggle the pointer 1px and back. Only needed for clients that watch mouse movement specifically. |
 | `--allow-locked` | off | Keep nudging while the screen is locked. Off by default on purpose — see below. |
+| `--once` | — | Send a single nudge and exit. |
 | `-n, --dry-run` | off | Log decisions, emit nothing. |
-| `--log-file` | — | Append to a rotating log as well as stderr. |
+| `-v, --verbose` | off | Debug logging. |
 | `--status` | — | One-shot health check. |
-| `--install-service` / `--uninstall-service` / `--service-status` | — | Login service, per platform. |
+| `--install` / `--uninstall` | — | Windows only. Linux uses `install.sh` / `uninstall.sh`. |
 
 ## Behaviour worth knowing
 
-**It stops when you lock the screen.** Locking is an explicit "I've stepped
-away", so the daemon pauses and resumes on unlock. `--allow-locked` overrides
-this, but then you're green while provably not at the machine — that's a
-different thing from what this tool is for.
+**It stops when you lock the screen.** Locking (Win+L, or GNOME's lock) is
+an explicit "I've stepped away", so the daemon pauses and resumes on unlock.
+`--allow-locked` overrides this, but then you're green while provably not at
+the machine — that's a different thing from what this tool is for.
+
+**Windows: it also holds off the automatic screen lock and screensaver.**
+Those run off the same idle clock, so while this is running your PC won't
+lock itself after N minutes of inactivity. Lock manually with **Win+L** when
+you walk away. If your organisation requires an inactivity lock, check before
+using this on a work machine.
 
 **It won't hide real absence beyond the idle clock.** If you're in a call,
-Teams sets your presence from the call, not from idle. Calendar-based statuses
-(In a meeting, Out of office) also win over Available.
+Teams sets your presence from the call, not from idle. Calendar-based
+statuses (In a meeting, Out of office) and a manually set status also win
+over Available.
 
-**Self-diagnosing.** After each nudge the daemon re-reads the idle clock. If
-the clock didn't reset, it logs a warning instead of silently doing nothing —
-that's your signal that the synthetic input isn't reaching the compositor.
-
-**It degrades rather than refusing.** A system whose idle clock it can't read
-falls back to nudging on a fixed cadence; one whose lock state it can't read
-simply never pauses. `--status` always says which backend was chosen.
+**Linux: your screen won't blank anyway** if
+`org.gnome.desktop.session idle-delay` is `0`; otherwise the nudges keep it
+awake too, the same as on Windows.
 
 ## Caveats
 
-- **Use a Chromium browser** (Chrome, Edge, Brave) for Teams web. Firefox has
-  no Idle Detection API, so Teams falls back to in-page listeners that only
-  see events delivered to the focused tab — no synthetic system-level input
-  will reach it. The Teams desktop app reads the same system idle clock as
-  Chromium and works fine.
-- **Linux/Wayland needs `uinput`.** On X11 the daemon can fall back to XTEST,
-  but a Wayland compositor ignores XTEST entirely.
-- **Windows: it can't run as a Windows service.** A real service runs in
-  session 0, where its input would never reach your desktop. The Run key entry
-  runs as you, in your session, which is what this needs.
-- Python 3.9 or newer. PyGObject is used on GNOME when it happens to be
-  installed, and `gdbus` is used when it isn't; neither is required to install.
+- **Linux + Firefox won't work.** Firefox has no Idle Detection API, so
+  Teams web falls back to in-page listeners that only see events delivered to
+  the focused Teams tab. Use a Chromium browser. (On Windows, the browser
+  doesn't matter.)
+- **Linux is GNOME/Wayland specific.** The idle-watch half is Mutter's D-Bus
+  API; the `uinput` half would work on any Linux.
+- **Windows: elevated windows.** `SendInput` can't reach a window running as
+  administrator while it has focus. The daemon warns in its log if a nudge
+  didn't reset the idle clock.
+
+## Upgrading from the Python version
+
+Earlier versions were a Python package installed with `pip` and set up with
+`--install-service`. The Go version uses the same login entries (the
+`TeamsRefresher` Run key on Windows, `teams-refresher.service` on Linux), so
+installing it replaces the old one. Afterwards, `pip uninstall teams-refresher`
+removes the leftover package.
+
+## Build from source
+
+```bash
+go test ./...
+go build .            # for this OS
+./build.sh            # all four release binaries into dist/
+```
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
+binaries and attaches them to a GitHub Release.
 
 ## Files
 
 | Path | |
 |---|---|
-| `teams_refresher/core.py` | The watch loop. No OS-specific code. |
-| `teams_refresher/backends/base.py` | The four interfaces a platform fills in. |
-| `teams_refresher/backends/{linux,macos,windows}.py` | One per platform, all `ctypes` and standard library. |
-| `teams_refresher/cli.py` | Arguments, `--status`, login-service commands. |
-| `install.sh` / `uninstall.sh` | Linux `uinput` permissions only. |
+| `main.go` | Flags, modes (`--status`, `--once`, daemon). |
+| `refresher.go` | The nudge policy, shared by all OSes. |
+| `platform_linux.go` | Mutter D-Bus idle watch + `/dev/uinput` keyboard. |
+| `platform_windows.go` | `GetLastInputInfo` + `SendInput`, lock detection. |
+| `install_windows.go` | `--install` / `--uninstall`, background logging. |
+| `install.sh` / `uninstall.sh` | Linux setup and full removal. |
+| `teams-refresher.service` | systemd user unit, tied to `graphical-session.target`. |
 
 ## Troubleshooting
 
-Start with `teams-refresher --status`. It prints the backend chosen for each
-job and whether the injector can actually open.
+**Linux: `--status` says uinput is NOT writable** → you haven't logged out
+since `install.sh` added you to `input`. Confirm with `id -nG | grep input`,
+or test immediately without logging out: `sg input -c 'teams-refresher -v'`.
 
-**Linux — "Cannot open /dev/uinput"** → you haven't logged out since
-`install.sh` added you to `input`. Confirm with `id -nG | grep input`, or test
-without logging out: `sg input -c 'teams-refresher -v'`.
+**"nudge did not reset the idle clock"** → the event isn't reaching the OS.
+On Linux, check `libinput list-devices | grep -i "Teams Refresher"` while the
+daemon runs. On Windows, check whether an elevated app had focus, or try
+`--pointer`.
 
-**macOS — "macOS is refusing synthetic input"** → Accessibility permission,
-as above. After a Python upgrade, remove the old entry and add it again.
+**Still going Away** → confirm the clock actually moves: run `--status` a few
+times while idle and check idle resets to ~0 after each nudge. If it does,
+Teams is deciding from something other than idle (a calendar event, or a
+manually pinned status).
 
-**"nudge did not reset the idle clock"** → the synthetic input isn't reaching
-the clock. On Linux, check `libinput list-devices | grep -i "Teams Refresher"`
-while the daemon runs. On macOS this is almost always Accessibility.
-
-**Still going Away** → confirm the clock actually moves: run
-`teams-refresher --status` twice around a `teams-refresher --once` and check
-that idle drops to ~0. If it does, Teams is deciding from something other than
-idle (a calendar event, or a manually pinned status).
+**Windows: nothing seems to run after `--install`** → look at the log in
+`%LOCALAPPDATA%\teams-refresher\teams-refresher.log`, and check Task
+Manager → Startup apps that `teams-refresher` is enabled.
