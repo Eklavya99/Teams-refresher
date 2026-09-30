@@ -150,6 +150,14 @@ awake too, the same as on Windows.
   administrator while it has focus. The daemon warns in its log if a nudge
   didn't reset the idle clock.
 
+## Upgrading from the Python version
+
+Earlier versions were a Python package installed with `pip` and set up with
+`--install-service`. The Go version uses the same login entries (the
+`TeamsRefresher` Run key on Windows, `teams-refresher.service` on Linux), so
+installing it replaces the old one. Afterwards, `pip uninstall teams-refresher`
+removes the leftover package.
+
 ## Build from source
 
 ```bash

@@ -16,6 +16,12 @@ say "Removing the udev rule (needs sudo)"
 sudo rm -f /etc/udev/rules.d/70-uinput-teams-refresher.rules /etc/modules-load.d/uinput.conf
 sudo udevadm control --reload-rules
 
+if command -v pip >/dev/null 2>&1 && pip show teams-refresher >/dev/null 2>&1; then
+  echo
+  echo "The older Python version is also installed; remove it with:"
+  echo "  pip uninstall teams-refresher"
+fi
+
 echo
 echo "Left alone on purpose: your membership of the 'input' group."
 echo "Remove it yourself if you want:  sudo gpasswd -d $USER input"
